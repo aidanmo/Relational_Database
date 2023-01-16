@@ -35,6 +35,11 @@ typedef enum
     STATEMENT_SELECT
 } StatementType;
 
+typedef enum {
+    EXECUTE_SUCCESS,
+	EXECUTE_TABLE_FULL,
+} ExecuteResult;
+
 #define COLUMN_USERNAME_SIZE 32
 #define COLUMN_EMAIL_SIZE 255
 #define sizeOfAttr(type, attr) sizeof(((type*)0)->attr)
@@ -61,6 +66,10 @@ typedef struct
     Row rowToInsert;
 } Statement;
 
+void printRow(Row* row) {
+    printf("(%d, %s, %s)\n", row->id, row->username, row->email);
+}
+
 //TODO 1
 void serializeRow(Row* source, void* destination) {
     memcpy((char*)destination + ID_OFFSET, &(source->id), ID_SIZE);
@@ -86,6 +95,35 @@ typedef struct{
     //void use to represent a pointer to a unknown data type.
     void* pages[TABLE_MAX_PAGES];
 } Table;
+
+void* rowSlot(Table* table, uint32_t rowNum) {
+    uint32_t pageNum = rowNum / ROWS_PER_PAGE;
+    void* page = table->pages[pageNum];
+    if(page == NULL) {
+        //allocate memory only when we try to access page.
+        page = table->pages[pageNum] = malloc(PAGE_SIZE);
+    }
+    uint32_t rowOffset = rowNum % ROWS_PER_PAGE;
+    uint32_t byteOffset = rowOffset * ROW_SIZE;
+    return (char*)page + byteOffset;
+
+}
+
+Table* newTable() {
+    Table* table = (Table*)malloc(sizeof(Table));
+    table->numRows = 0;
+    for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) {
+        table->pages[i] = NULL;
+    }
+    return table;
+}
+
+void freeTable (Table* table) {
+    for (int i = 0; table->pages[i]; i++) {
+        free(table->pages[i]);
+    }
+    free(table);
+}
 
 
 
@@ -138,16 +176,35 @@ PrepareResult prepareStatement(InputBuffer* inputBuffer,
     return PREPARE_UNRECOGNIZED_STATEMENT;
 }
 
-void executeStatement(Statement* statement)
+ExecuteResult executeInsert(Statement* statement, Table* table) {
+    if (table->numRows >= TABLE_MAX_ROWS) {
+        return EXECUTE_TABLE_FULL;
+    }
+    Row* rowToInsert = &(statement->rowToInsert);
+
+    serializeRow(rowToInsert, rowSlot(table, table->numRows));
+    table->numRows += 1;
+    
+    return EXECUTE_SUCCESS;
+}
+
+ExecuteResult executeSelect(Statement* statement, Table* table) {
+    Row row;
+    for (uint32_t i = 0; i < table->numRows; i++) {
+        deserializeRow(rowSlot(table, i), &row);
+        printRow(&row);
+    }
+    return EXECUTE_SUCCESS;
+}
+
+ExecuteResult executeStatement(Statement* statement, Table* table)
 {
     switch (statement->type)
     {
     case (STATEMENT_INSERT):
-        printf("This is where we would do an insert.\n");
-        break;
+        return executeInsert(statement, table);
     case (STATEMENT_SELECT):
-        printf("This is where we would do a select.\n");
-        break;
+        return executeSelect(statement, table);
     }
 }
 
@@ -191,6 +248,7 @@ void closeInputBuffer(InputBuffer* inputBuffer)
 
 int main(int argc, char* argv[])
 {
+    Table* table = newTable();
     InputBuffer* inputBuffer = newInputBuffer();
     while (true)
     {
@@ -222,7 +280,14 @@ int main(int argc, char* argv[])
         }
 
         // Need to define this function and statement variable.
-        executeStatement(&statement);
-        printf("Executed.\n");
+        switch (executeStatement(&statement, table)) {
+            case (EXECUTE_SUCCESS):
+                printf("Executed.\n");
+                break;
+            case (EXECUTE_TABLE_FULL):
+                printf("Error: Table full.\n");
+                break;
+        }
+        
     }
 }
